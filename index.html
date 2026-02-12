@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CELPIP Daily Vocab (400)</title>
 
-  <!-- Supabase client (email magic link + sync). This exposes window.supabase (the library). -->
+  <!-- Supabase client (email/password auth + sync). Provides window.supabase (library). -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <style>
@@ -93,6 +93,7 @@
     }
     button:hover { background: rgba(18,26,39,.75); }
     button:active { transform: scale(.98); }
+    button:disabled { opacity:.55; cursor:not-allowed; }
     .primary { border-color: rgba(106,166,255,.7); background: rgba(106,166,255,.14); }
     .good { border-color: rgba(47,229,155,.7); background: rgba(47,229,155,.12); }
     .warn { border-color: rgba(255,204,102,.7); background: rgba(255,204,102,.12); }
@@ -145,17 +146,26 @@
   <header>
     <div class="title">
       <h1>CELPIP Daily Vocab (400)</h1>
-      <p class="sub">Tap the card to flip. Progress saves locally and (if you log in) syncs across devices.</p>
+      <p class="sub">Tap the card to flip. Progress saves locally and (if you sign in) syncs across devices.</p>
 
-      <!-- AUTH UI -->
-      <div class="pillrow" id="authBox" style="margin-top:8px;">
+      <!-- AUTH UI (Email + Password) -->
+      <div class="pillrow" id="authBox" style="margin-top:8px; gap:8px;">
         <div class="pill">
           <span class="muted">Email</span>
           <input id="emailInput" type="email" placeholder="you@email.com" style="width:190px;text-align:left;" />
         </div>
-        <button class="mini primary" id="sendLinkBtn">Send magic link</button>
+        <div class="pill">
+          <span class="muted">Password</span>
+          <input id="passwordInput" type="password" placeholder="••••••••" style="width:150px;text-align:left;" />
+        </div>
+        <button class="mini primary" id="signInBtn">Sign in</button>
+        <button class="mini" id="signUpBtn">Sign up</button>
         <button class="mini" id="logoutBtn" style="display:none;">Log out</button>
-        <div class="footer" id="authStatus" style="max-width:420px;"></div>
+        <div class="footer" id="authStatus" style="max-width:520px;"></div>
+      </div>
+
+      <div class="footer" style="margin-top:4px;">
+        Tip: if you turned on “Confirm email” in Supabase, you’ll need to confirm your email once after signing up.
       </div>
     </div>
 
@@ -276,7 +286,7 @@
   </div>
 
   <div class="footer">
-    Data stays on your device (localStorage). If you log in, your progress also syncs to your Supabase account.
+    Data stays on your device (localStorage). If you sign in, your progress also syncs to your Supabase account.
   </div>
 </div>
 
@@ -284,16 +294,14 @@
 
 <script>
 /* =========================================================
-   IMPORTANT: Put your Supabase credentials here
+   SUPABASE CONFIG (put your values here)
    ========================================================= */
-const SUPABASE_URL = "https://yhnckwoaqmagliwrtdkn.supabase.co";        // e.g. https://xxxx.supabase.co
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlobmNrd29hcW1hZ2xpd3J0ZGtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5MjQ3MjUsImV4cCI6MjA4NjUwMDcyNX0.7ATeARJ3z74ylwVEl6cS1Oukp7znFViTycrCqpG8fvQ"; // anon public key (long string)
+const SUPABASE_URL = "YOUR_SUPABASE_URL";            // e.g. https://xxxxx.supabase.co
+const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";  // anon public key (long string)
 
-/* =========================================================
-   NOTE: We DO NOT declare any variable named `supabase`.
-   - window.supabase = the library (from CDN)
-   - sb = your client instance (single declaration)
-   ========================================================= */
+// We DO NOT declare any variable named `supabase`.
+// window.supabase = library (from CDN)
+// sb = your client instance (single declaration)
 const sb = (SUPABASE_URL.startsWith("https://") && SUPABASE_URL.includes(".supabase.co") && SUPABASE_ANON_KEY.length > 20)
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
@@ -722,7 +730,7 @@ const WORDS = parseWords(RAW);
 /* ===========================
    2) Storage + helpers
    =========================== */
-const LS_KEY = "celpip_vocab_progress_v3";
+const LS_KEY = "celpip_vocab_progress_v4_pw";
 
 function loadProgress() {
   try {
@@ -874,7 +882,9 @@ const resetBtn = document.getElementById("resetBtn");
 
 /* Auth refs */
 const emailInput = document.getElementById("emailInput");
-const sendLinkBtn = document.getElementById("sendLinkBtn");
+const passwordInput = document.getElementById("passwordInput");
+const signInBtn = document.getElementById("signInBtn");
+const signUpBtn = document.getElementById("signUpBtn");
 const logoutBtn = document.getElementById("logoutBtn");
 const authStatus = document.getElementById("authStatus");
 
@@ -1139,7 +1149,7 @@ function importJSON(file) {
 }
 
 /* ===========================
-   8) Supabase Auth + Sync
+   8) Supabase Auth + Sync (Email + Password)
    =========================== */
 let currentUser = null;
 let syncTimer = null;
@@ -1148,35 +1158,51 @@ let isApplyingRemote = false;
 function setAuthUI({ loggedIn, message }) {
   authStatus.textContent = message || "";
   logoutBtn.style.display = loggedIn ? "inline-block" : "none";
-  sendLinkBtn.style.display = loggedIn ? "none" : "inline-block";
+  signInBtn.style.display = loggedIn ? "none" : "inline-block";
+  signUpBtn.style.display = loggedIn ? "none" : "inline-block";
   emailInput.disabled = loggedIn;
+  passwordInput.disabled = loggedIn;
 }
 
-async function sendMagicLink(email) {
+async function signUp(email, password) {
   if (!sb) {
     setAuthUI({ loggedIn:false, message:"Sync disabled: add Supabase URL + anon key in the code." });
     return;
   }
-  setAuthUI({ loggedIn: false, message: "Sending magic link..." });
-  const redirectTo = window.location.origin + window.location.pathname;
+  setAuthUI({ loggedIn:false, message:"Signing up..." });
 
-  const { error } = await sb.auth.signInWithOtp({
-    email,
-    options: { emailRedirectTo: redirectTo }
-  });
+  const { error } = await sb.auth.signUp({ email, password });
 
   if (error) {
-    setAuthUI({ loggedIn: false, message: "Error: " + error.message });
+    setAuthUI({ loggedIn:false, message:"Error: " + error.message });
     return;
   }
-  setAuthUI({ loggedIn: false, message: "Magic link sent. Check inbox/spam." });
+
+  // If email confirmation is enabled, user must confirm before they can sign in.
+  setAuthUI({ loggedIn:false, message:"Signed up! If email confirmation is enabled, check your inbox to confirm, then sign in." });
+}
+
+async function signIn(email, password) {
+  if (!sb) {
+    setAuthUI({ loggedIn:false, message:"Sync disabled: add Supabase URL + anon key in the code." });
+    return;
+  }
+  setAuthUI({ loggedIn:false, message:"Signing in..." });
+
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+
+  if (error) {
+    setAuthUI({ loggedIn:false, message:"Error: " + error.message });
+    return;
+  }
+  // onAuthStateChange will do sync
 }
 
 async function signOut() {
   if (!sb) return;
   await sb.auth.signOut();
   currentUser = null;
-  setAuthUI({ loggedIn: false, message: "Logged out (local-only mode)." });
+  setAuthUI({ loggedIn:false, message:"Logged out (local-only mode)." });
 }
 
 function scheduleCloudSync() {
@@ -1189,15 +1215,12 @@ function scheduleCloudSync() {
 function mergeRemoteIntoLocal(remote) {
   const remoteKnown = new Set(remote.known || []);
   const remoteHard = new Set(remote.hard || []);
-
   for (const id of remoteKnown) state.known.add(id);
   for (const id of remoteHard) state.hard.add(id);
-
   ensureConsistency();
 
   if (Number.isFinite(remote.per_day)) state.perDay = remote.per_day;
   if (typeof remote.deck_mode === "string") state.deckMode = remote.deck_mode;
-
   perDayEl.value = state.perDay;
   deckModeEl.value = state.deckMode;
 }
@@ -1205,7 +1228,7 @@ function mergeRemoteIntoLocal(remote) {
 async function loadProgressFromCloud() {
   if (!sb || !currentUser) return;
 
-  setAuthUI({ loggedIn: true, message: "Syncing..." });
+  setAuthUI({ loggedIn:true, message:"Signed in. Syncing..." });
 
   const { data, error } = await sb
     .from("progress")
@@ -1214,21 +1237,21 @@ async function loadProgressFromCloud() {
     .maybeSingle();
 
   if (error) {
-    setAuthUI({ loggedIn: true, message: "Sync error: " + error.message });
+    setAuthUI({ loggedIn:true, message:"Sync error: " + error.message });
     return;
   }
 
   isApplyingRemote = true;
   try {
     if (data) mergeRemoteIntoLocal(data);
-    // Persist merged union back to cloud (and create row if missing)
+    // Persist union back to cloud (and create row if missing)
     await pushProgressToCloud(false);
   } finally {
     isApplyingRemote = false;
   }
 
   buildToday(); buildDeck(); renderAll();
-  setAuthUI({ loggedIn: true, message: "Synced ✓" });
+  setAuthUI({ loggedIn:true, message:"Signed in • Synced ✓" });
 }
 
 async function pushProgressToCloud(showToastMsg=false) {
@@ -1246,11 +1269,10 @@ async function pushProgressToCloud(showToastMsg=false) {
   const { error } = await sb.from("progress").upsert(payload);
 
   if (error) {
-    setAuthUI({ loggedIn: true, message: "Save error: " + error.message });
+    setAuthUI({ loggedIn:true, message:"Save error: " + error.message });
     return;
   }
   if (showToastMsg) toast("Synced");
-  setAuthUI({ loggedIn: true, message: "Synced ✓" });
 }
 
 /* Unified save (local + optional cloud) */
@@ -1328,7 +1350,7 @@ importFile.addEventListener("change", (e) => {
 });
 
 resetBtn.addEventListener("click", async () => {
-  if (!confirm("Reset Known/Hard progress? (Clears local; if logged in it will also clear cloud.)")) return;
+  if (!confirm("Reset Known/Hard progress? (Clears local; if signed in it will also clear cloud.)")) return;
   state.known.clear();
   state.hard.clear();
   saveProgress();
@@ -1337,10 +1359,20 @@ resetBtn.addEventListener("click", async () => {
 });
 
 /* Auth buttons */
-sendLinkBtn.addEventListener("click", () => {
+signUpBtn.addEventListener("click", async () => {
   const email = (emailInput.value || "").trim();
-  if (!email) { setAuthUI({ loggedIn:false, message:"Enter your email first." }); return; }
-  sendMagicLink(email);
+  const pw = (passwordInput.value || "").trim();
+  if (!email || !pw) { setAuthUI({ loggedIn:false, message:"Enter email + password." }); return; }
+  await signUp(email, pw);
+});
+signInBtn.addEventListener("click", async () => {
+  const email = (emailInput.value || "").trim();
+  const pw = (passwordInput.value || "").trim();
+  if (!email || !pw) { setAuthUI({ loggedIn:false, message:"Enter email + password." }); return; }
+  await signIn(email, pw);
+});
+passwordInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") signInBtn.click();
 });
 logoutBtn.addEventListener("click", signOut);
 
@@ -1368,10 +1400,9 @@ logoutBtn.addEventListener("click", signOut);
   sb.auth.onAuthStateChange(async (_event, session) => {
     currentUser = session?.user || null;
     if (currentUser) {
-      setAuthUI({ loggedIn:true, message:"Logged in. Syncing..." });
       await loadProgressFromCloud();
     } else {
-      setAuthUI({ loggedIn:false, message:"Not logged in (local-only mode)." });
+      setAuthUI({ loggedIn:false, message:"Not signed in (local-only mode)." });
     }
   });
 
@@ -1379,10 +1410,9 @@ logoutBtn.addEventListener("click", signOut);
   currentUser = data?.session?.user || null;
 
   if (currentUser) {
-    setAuthUI({ loggedIn:true, message:"Logged in. Syncing..." });
     await loadProgressFromCloud();
   } else {
-    setAuthUI({ loggedIn:false, message:"Not logged in (local-only mode)." });
+    setAuthUI({ loggedIn:false, message:"Not signed in (local-only mode)." });
   }
 })();
 </script>
