@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CELPIP Daily Vocab (400)</title>
 
-  <!-- Supabase client (for email magic link + sync) -->
+  <!-- Supabase client (email magic link + sync). This exposes window.supabase (the library). -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <style>
@@ -286,18 +286,20 @@
 /* =========================================================
    IMPORTANT: Put your Supabase credentials here
    ========================================================= */
-const SUPABASE_URL = "https://yhnckwoaqmagliwrtdkn.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlobmNrd29hcW1hZ2xpd3J0ZGtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5MjQ3MjUsImV4cCI6MjA4NjUwMDcyNX0.7ATeARJ3z74ylwVEl6cS1Oukp7znFViTycrCqpG8fvQ";
-// Example:
-// const SUPABASE_URL = "https://xxxxxx.supabase.co";
-// const SUPABASE_ANON_KEY = "eyJhbGciOi...";
+const SUPABASE_URL = "https://yhnckwoaqmagliwrtdkn.supabase.co";        // e.g. https://xxxx.supabase.co
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlobmNrd29hcW1hZ2xpd3J0ZGtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5MjQ3MjUsImV4cCI6MjA4NjUwMDcyNX0.7ATeARJ3z74ylwVEl6cS1Oukp7znFViTycrCqpG8fvQ"; // anon public key (long string)
 
-const supabase = (SUPABASE_URL.startsWith("http") && SUPABASE_ANON_KEY.includes("."))
+/* =========================================================
+   NOTE: We DO NOT declare any variable named `supabase`.
+   - window.supabase = the library (from CDN)
+   - sb = your client instance (single declaration)
+   ========================================================= */
+const sb = (SUPABASE_URL.startsWith("https://") && SUPABASE_URL.includes(".supabase.co") && SUPABASE_ANON_KEY.length > 20)
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
 
 /* ===========================
-   1) Word data (from the PDF)
+   1) Word data
    =========================== */
 const RAW = `
 1. blurry - not clear
@@ -720,7 +722,7 @@ const WORDS = parseWords(RAW);
 /* ===========================
    2) Storage + helpers
    =========================== */
-const LS_KEY = "celpip_vocab_progress_v2";
+const LS_KEY = "celpip_vocab_progress_v3";
 
 function loadProgress() {
   try {
@@ -825,7 +827,6 @@ state.quizRevealed = false;
    =========================== */
 const perDayEl = document.getElementById("perDay");
 const deckModeEl = document.getElementById("deckMode");
-
 const panelTitleEl = document.getElementById("panelTitle");
 
 const flashPanel = document.getElementById("flashPanel");
@@ -1058,7 +1059,6 @@ function prev() { state.pos = (state.pos - 1 + state.deck.length) % state.deck.l
 function next() { state.pos = (state.pos + 1) % state.deck.length; state.flipped = false; renderFlash(); }
 
 function ensureConsistency() {
-  // If something is known, don't keep it hard
   for (const id of state.known) state.hard.delete(id);
 }
 
@@ -1139,14 +1139,11 @@ function importJSON(file) {
 }
 
 /* ===========================
-   Supabase Auth + Sync (FIXED)
+   8) Supabase Auth + Sync
    =========================== */
 let currentUser = null;
 let syncTimer = null;
 let isApplyingRemote = false;
-
-// Create client ONCE
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 function setAuthUI({ loggedIn, message }) {
   authStatus.textContent = message || "";
@@ -1156,6 +1153,10 @@ function setAuthUI({ loggedIn, message }) {
 }
 
 async function sendMagicLink(email) {
+  if (!sb) {
+    setAuthUI({ loggedIn:false, message:"Sync disabled: add Supabase URL + anon key in the code." });
+    return;
+  }
   setAuthUI({ loggedIn: false, message: "Sending magic link..." });
   const redirectTo = window.location.origin + window.location.pathname;
 
@@ -1172,20 +1173,26 @@ async function sendMagicLink(email) {
 }
 
 async function signOut() {
+  if (!sb) return;
   await sb.auth.signOut();
   currentUser = null;
   setAuthUI({ loggedIn: false, message: "Logged out (local-only mode)." });
 }
 
-function ensureConsistency() {
-  for (const id of state.known) state.hard.delete(id);
+function scheduleCloudSync() {
+  if (!sb || !currentUser) return;
+  if (isApplyingRemote) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => pushProgressToCloud(false), 700);
 }
 
 function mergeRemoteIntoLocal(remote) {
   const remoteKnown = new Set(remote.known || []);
   const remoteHard = new Set(remote.hard || []);
+
   for (const id of remoteKnown) state.known.add(id);
   for (const id of remoteHard) state.hard.add(id);
+
   ensureConsistency();
 
   if (Number.isFinite(remote.per_day)) state.perDay = remote.per_day;
@@ -1196,7 +1203,7 @@ function mergeRemoteIntoLocal(remote) {
 }
 
 async function loadProgressFromCloud() {
-  if (!currentUser) return;
+  if (!sb || !currentUser) return;
 
   setAuthUI({ loggedIn: true, message: "Syncing..." });
 
@@ -1213,10 +1220,8 @@ async function loadProgressFromCloud() {
 
   isApplyingRemote = true;
   try {
-    if (data) {
-      mergeRemoteIntoLocal(data);
-    }
-    // Persist merged local -> cloud (also creates row if it didn't exist)
+    if (data) mergeRemoteIntoLocal(data);
+    // Persist merged union back to cloud (and create row if missing)
     await pushProgressToCloud(false);
   } finally {
     isApplyingRemote = false;
@@ -1227,7 +1232,8 @@ async function loadProgressFromCloud() {
 }
 
 async function pushProgressToCloud(showToastMsg=false) {
-  if (!currentUser || isApplyingRemote) return;
+  if (!sb || !currentUser) return;
+  if (isApplyingRemote) return;
 
   const payload = {
     user_id: currentUser.id,
@@ -1246,52 +1252,6 @@ async function pushProgressToCloud(showToastMsg=false) {
   if (showToastMsg) toast("Synced");
   setAuthUI({ loggedIn: true, message: "Synced ✓" });
 }
-
-function scheduleCloudSync() {
-  if (!currentUser || isApplyingRemote) return;
-  clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => pushProgressToCloud(false), 700);
-}
-
-// Override saveProgress to include cloud sync
-function saveProgress() {
-  saveProgressLocal(false);
-  scheduleCloudSync();
-}
-
-// Wire auth buttons
-sendLinkBtn.addEventListener("click", () => {
-  const email = (emailInput.value || "").trim();
-  if (!email) {
-    setAuthUI({ loggedIn:false, message:"Enter your email first." });
-    return;
-  }
-  sendMagicLink(email);
-});
-logoutBtn.addEventListener("click", signOut);
-
-// Auth state changes
-sb.auth.onAuthStateChange(async (_event, session) => {
-  currentUser = session?.user || null;
-  if (currentUser) {
-    setAuthUI({ loggedIn:true, message:"Logged in. Syncing..." });
-    await loadProgressFromCloud();
-  } else {
-    setAuthUI({ loggedIn:false, message:"Not logged in (local-only mode)." });
-  }
-});
-
-// Initial session check
-(async function initAuth() {
-  const { data } = await sb.auth.getSession();
-  currentUser = data?.session?.user || null;
-  if (currentUser) {
-    setAuthUI({ loggedIn:true, message:"Logged in. Syncing..." });
-    await loadProgressFromCloud();
-  } else {
-    setAuthUI({ loggedIn:false, message:"Not logged in (local-only mode)." });
-  }
-})();
 
 /* Unified save (local + optional cloud) */
 function saveProgress() {
@@ -1340,6 +1300,7 @@ searchInput.addEventListener("input", () => renderSearchList(searchInput.value))
 checkBtn.addEventListener("click", checkQuiz);
 revealBtn.addEventListener("click", revealQuiz);
 newQuizBtn.addEventListener("click", newQuizWord);
+
 quizKnownBtn.addEventListener("click", () => {
   if (!state.quizItem) return;
   state.known.add(state.quizItem.id);
@@ -1367,12 +1328,12 @@ importFile.addEventListener("change", (e) => {
 });
 
 resetBtn.addEventListener("click", async () => {
-  if (!confirm("Reset Known/Hard progress? (This clears locally, and will sync the cleared state if logged in.)")) return;
+  if (!confirm("Reset Known/Hard progress? (Clears local; if logged in it will also clear cloud.)")) return;
   state.known.clear();
   state.hard.clear();
   saveProgress();
   renderAll();
-  if (supabase && currentUser) await pushProgressToCloud(true);
+  if (sb && currentUser) await pushProgressToCloud(true);
 });
 
 /* Auth buttons */
@@ -1384,9 +1345,9 @@ sendLinkBtn.addEventListener("click", () => {
 logoutBtn.addEventListener("click", signOut);
 
 /* ===========================
-   10) Boot
+   10) Boot app
    =========================== */
-(function init() {
+(function initApp() {
   perDayEl.value = state.perDay || 10;
   deckModeEl.value = state.deckMode || "today";
   ensureConsistency();
@@ -1395,15 +1356,16 @@ logoutBtn.addEventListener("click", signOut);
   renderAll();
 })();
 
-/* Auth init */
+/* ===========================
+   11) Boot auth
+   =========================== */
 (async function initAuth() {
-  if (!supabase) {
+  if (!sb) {
     setAuthUI({ loggedIn:false, message:"Sync disabled: add Supabase URL + anon key in the code." });
     return;
   }
 
-  // Listener
-  supabase.auth.onAuthStateChange(async (_event, session) => {
+  sb.auth.onAuthStateChange(async (_event, session) => {
     currentUser = session?.user || null;
     if (currentUser) {
       setAuthUI({ loggedIn:true, message:"Logged in. Syncing..." });
@@ -1413,8 +1375,7 @@ logoutBtn.addEventListener("click", signOut);
     }
   });
 
-  // Initial session
-  const { data } = await supabase.auth.getSession();
+  const { data } = await sb.auth.getSession();
   currentUser = data?.session?.user || null;
 
   if (currentUser) {
@@ -1427,5 +1388,3 @@ logoutBtn.addEventListener("click", signOut);
 </script>
 </body>
 </html>
-
-
