@@ -1160,23 +1160,48 @@ function scheduleCloudSync() {
 }
 
 async function sendMagicLink(email) {
-  if (!supabase) {
-    setAuthUI({ loggedIn:false, message:"Add your Supabase URL + anon key in the code first." });
-    return;
+  try {
+    if (!supabase) {
+      alert("Supabase is not configured. Check SUPABASE_URL and SUPABASE_ANON_KEY.");
+      setAuthUI({ loggedIn:false, message:"Supabase not configured. Add URL + anon key." });
+      return;
+    }
+    if (!SUPABASE_URL.startsWith("https://") || !SUPABASE_URL.includes(".supabase.co")) {
+      alert("SUPABASE_URL looks wrong. It should be like https://xxxxx.supabase.co");
+      return;
+    }
+    if (!SUPABASE_ANON_KEY.startsWith("eyJ")) {
+      alert("SUPABASE_ANON_KEY looks wrong. Use the 'anon public key' from Project Settings → API.");
+      return;
+    }
+
+    setAuthUI({ loggedIn: false, message: "Sending magic link..." });
+    console.log("Sending magic link to:", email);
+
+    const redirectTo = window.location.origin + window.location.pathname;
+
+    const { data, error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: redirectTo }
+    });
+
+    console.log("OTP result:", { data, error });
+
+    if (error) {
+      alert("Supabase error: " + error.message);
+      setAuthUI({ loggedIn: false, message: "Error: " + error.message });
+      return;
+    }
+
+    alert("Magic link sent! Check your email inbox/spam.");
+    setAuthUI({ loggedIn: false, message: "Magic link sent. Check inbox/spam." });
+  } catch (e) {
+    console.error(e);
+    alert("Unexpected error. Open Console and check the error log.");
+    setAuthUI({ loggedIn: false, message: "Unexpected error. Check Console." });
   }
-  setAuthUI({ loggedIn: false, message: "Sending magic link..." });
-
-  // Redirect back to this page URL (GitHub Pages-friendly)
-  const redirectTo = window.location.origin + window.location.pathname;
-
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: { emailRedirectTo: redirectTo }
-  });
-
-  if (error) { setAuthUI({ loggedIn: false, message: "Error: " + error.message }); return; }
-  setAuthUI({ loggedIn: false, message: "Check your email for the login link." });
 }
+
 
 async function signOut() {
   if (!supabase) return;
