@@ -1139,11 +1139,14 @@ function importJSON(file) {
 }
 
 /* ===========================
-   8) Supabase Auth + Sync
+   Supabase Auth + Sync (FIXED)
    =========================== */
 let currentUser = null;
 let syncTimer = null;
 let isApplyingRemote = false;
+
+// Create client ONCE
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 function setAuthUI({ loggedIn, message }) {
   authStatus.textContent = message || "";
@@ -1152,73 +1155,37 @@ function setAuthUI({ loggedIn, message }) {
   emailInput.disabled = loggedIn;
 }
 
-function scheduleCloudSync() {
-  if (!supabase || !currentUser) return;
-  if (isApplyingRemote) return;
-  clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => pushProgressToCloud(false), 700);
-}
-
 async function sendMagicLink(email) {
-  try {
-    if (!supabase) {
-      alert("Supabase is not configured. Check SUPABASE_URL and SUPABASE_ANON_KEY.");
-      setAuthUI({ loggedIn:false, message:"Supabase not configured. Add URL + anon key." });
-      return;
-    }
-    if (!SUPABASE_URL.startsWith("https://") || !SUPABASE_URL.includes(".supabase.co")) {
-      alert("SUPABASE_URL looks wrong. It should be like https://xxxxx.supabase.co");
-      return;
-    }
-    if (!SUPABASE_ANON_KEY.startsWith("eyJ")) {
-      alert("SUPABASE_ANON_KEY looks wrong. Use the 'anon public key' from Project Settings → API.");
-      return;
-    }
+  setAuthUI({ loggedIn: false, message: "Sending magic link..." });
+  const redirectTo = window.location.origin + window.location.pathname;
 
-    setAuthUI({ loggedIn: false, message: "Sending magic link..." });
-    console.log("Sending magic link to:", email);
+  const { error } = await sb.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: redirectTo }
+  });
 
-    const redirectTo = window.location.origin + window.location.pathname;
-
-    const { data, error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: redirectTo }
-    });
-
-    console.log("OTP result:", { data, error });
-
-    if (error) {
-      alert("Supabase error: " + error.message);
-      setAuthUI({ loggedIn: false, message: "Error: " + error.message });
-      return;
-    }
-
-    alert("Magic link sent! Check your email inbox/spam.");
-    setAuthUI({ loggedIn: false, message: "Magic link sent. Check inbox/spam." });
-  } catch (e) {
-    console.error(e);
-    alert("Unexpected error. Open Console and check the error log.");
-    setAuthUI({ loggedIn: false, message: "Unexpected error. Check Console." });
+  if (error) {
+    setAuthUI({ loggedIn: false, message: "Error: " + error.message });
+    return;
   }
+  setAuthUI({ loggedIn: false, message: "Magic link sent. Check inbox/spam." });
 }
-
 
 async function signOut() {
-  if (!supabase) return;
-  await supabase.auth.signOut();
+  await sb.auth.signOut();
   currentUser = null;
-  setAuthUI({ loggedIn: false, message: "Logged out (still local-only)." });
+  setAuthUI({ loggedIn: false, message: "Logged out (local-only mode)." });
+}
+
+function ensureConsistency() {
+  for (const id of state.known) state.hard.delete(id);
 }
 
 function mergeRemoteIntoLocal(remote) {
-  // union merge so you don't lose marks
   const remoteKnown = new Set(remote.known || []);
   const remoteHard = new Set(remote.hard || []);
-
   for (const id of remoteKnown) state.known.add(id);
   for (const id of remoteHard) state.hard.add(id);
-
-  // keep sets consistent
   ensureConsistency();
 
   if (Number.isFinite(remote.per_day)) state.perDay = remote.per_day;
@@ -1229,11 +1196,11 @@ function mergeRemoteIntoLocal(remote) {
 }
 
 async function loadProgressFromCloud() {
-  if (!supabase || !currentUser) return;
+  if (!currentUser) return;
 
   setAuthUI({ loggedIn: true, message: "Syncing..." });
 
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from("progress")
     .select("known, hard, per_day, deck_mode")
     .eq("user_id", currentUser.id)
@@ -1248,12 +1215,9 @@ async function loadProgressFromCloud() {
   try {
     if (data) {
       mergeRemoteIntoLocal(data);
-      // After merging remote->local, write local back (so union is persisted)
-      await pushProgressToCloud(false);
-    } else {
-      // No row yet: create from local
-      await pushProgressToCloud(false);
     }
+    // Persist merged local -> cloud (also creates row if it didn't exist)
+    await pushProgressToCloud(false);
   } finally {
     isApplyingRemote = false;
   }
@@ -1263,8 +1227,7 @@ async function loadProgressFromCloud() {
 }
 
 async function pushProgressToCloud(showToastMsg=false) {
-  if (!supabase || !currentUser) return;
-  if (isApplyingRemote) return;
+  if (!currentUser || isApplyingRemote) return;
 
   const payload = {
     user_id: currentUser.id,
@@ -1274,7 +1237,7 @@ async function pushProgressToCloud(showToastMsg=false) {
     deck_mode: state.deckMode
   };
 
-  const { error } = await supabase.from("progress").upsert(payload);
+  const { error } = await sb.from("progress").upsert(payload);
 
   if (error) {
     setAuthUI({ loggedIn: true, message: "Save error: " + error.message });
@@ -1283,6 +1246,52 @@ async function pushProgressToCloud(showToastMsg=false) {
   if (showToastMsg) toast("Synced");
   setAuthUI({ loggedIn: true, message: "Synced ✓" });
 }
+
+function scheduleCloudSync() {
+  if (!currentUser || isApplyingRemote) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => pushProgressToCloud(false), 700);
+}
+
+// Override saveProgress to include cloud sync
+function saveProgress() {
+  saveProgressLocal(false);
+  scheduleCloudSync();
+}
+
+// Wire auth buttons
+sendLinkBtn.addEventListener("click", () => {
+  const email = (emailInput.value || "").trim();
+  if (!email) {
+    setAuthUI({ loggedIn:false, message:"Enter your email first." });
+    return;
+  }
+  sendMagicLink(email);
+});
+logoutBtn.addEventListener("click", signOut);
+
+// Auth state changes
+sb.auth.onAuthStateChange(async (_event, session) => {
+  currentUser = session?.user || null;
+  if (currentUser) {
+    setAuthUI({ loggedIn:true, message:"Logged in. Syncing..." });
+    await loadProgressFromCloud();
+  } else {
+    setAuthUI({ loggedIn:false, message:"Not logged in (local-only mode)." });
+  }
+});
+
+// Initial session check
+(async function initAuth() {
+  const { data } = await sb.auth.getSession();
+  currentUser = data?.session?.user || null;
+  if (currentUser) {
+    setAuthUI({ loggedIn:true, message:"Logged in. Syncing..." });
+    await loadProgressFromCloud();
+  } else {
+    setAuthUI({ loggedIn:false, message:"Not logged in (local-only mode)." });
+  }
+})();
 
 /* Unified save (local + optional cloud) */
 function saveProgress() {
