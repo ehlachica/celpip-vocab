@@ -74,6 +74,23 @@ const signUpBtn = document.getElementById("signUpBtn");
 const logoutBtn = document.getElementById("logoutBtn");
 const authStatus = document.getElementById("authStatus");
 
+
+const userPill = document.getElementById("userPill");
+const userNameEl = document.getElementById("userName");
+
+const emailPill = emailInput?.closest(".pill");
+const passwordPill = passwordInput?.closest(".pill");
+
+const authSignedOut = document.getElementById("authSignedOut");
+const authSignedIn  = document.getElementById("authSignedIn");
+
+const authMenuWrap = document.getElementById("authMenuWrap");
+const authMenuBtn = document.getElementById("authMenuBtn");
+const authMenu = document.getElementById("authMenu");
+const logoutBtnMobile = document.getElementById("logoutBtnMobile");
+
+
+
 /* ===========================
    3) Storage wrappers
    =========================== */
@@ -353,14 +370,39 @@ const sb = createSupabaseClient();
 let currentUser = null;
 let syncTimer = null;
 let isApplyingRemote = false;
+let authVersion = 0;
 
-function setAuthUI({ loggedIn, message }) {
-  authStatus.textContent = message || "";
-  logoutBtn.style.display = loggedIn ? "inline-block" : "none";
-  signInBtn.style.display = loggedIn ? "none" : "inline-block";
-  signUpBtn.style.display = loggedIn ? "none" : "inline-block";
-  emailInput.disabled = loggedIn;
-  passwordInput.disabled = loggedIn;
+
+function usernameFromEmail(email) {
+  const e = (email || "").trim();
+  const at = e.indexOf("@");
+  return at > 0 ? e.slice(0, at) : e;
+}
+
+function setAuthUI({ loggedIn, message = "", email = "" }) {
+  const msg = (message || "").trim();
+  authStatus.textContent = msg;
+
+  if (authSignedOut) authSignedOut.style.display = loggedIn ? "none" : "flex";
+  if (authSignedIn) authSignedIn.style.display = loggedIn ? "flex" : "none";
+
+  if (loggedIn && userNameEl) userNameEl.textContent = usernameFromEmail(email);
+
+  if (!loggedIn) closeAuthMenu();  // ✅ important on mobile
+
+  if (passwordInput) passwordInput.value = "";
+}
+
+function closeAuthMenu() {
+  if (!authMenu) return;
+  authMenu.classList.remove("open");
+  authMenuBtn?.setAttribute("aria-expanded", "false");
+}
+
+function toggleAuthMenu() {
+  if (!authMenu) return;
+  const isOpen = authMenu.classList.toggle("open");
+  authMenuBtn?.setAttribute("aria-expanded", isOpen ? "true" : "false");
 }
 
 async function signUp(email, password) {
@@ -395,12 +437,62 @@ async function signIn(email, password) {
   }
 }
 
+function clearAllSupabaseAuthKeys() {
+  const clearFrom = (store) => {
+    if (!store) return;
+    try {
+      // remove your fixed key
+      store.removeItem("celpip_vocab_auth");
+
+      // remove any supabase-generated keys
+      for (let i = store.length - 1; i >= 0; i--) {
+        const k = store.key(i);
+        if (!k) continue;
+        if (k === "celpip_vocab_auth" || /^sb-.*-auth-token$/.test(k)) {
+          store.removeItem(k);
+        }
+      }
+    } catch (e) {
+      console.warn("Auth storage clear failed:", e);
+    }
+  };
+
+  clearFrom(localStorage);
+  clearFrom(sessionStorage);
+}
+
 async function signOut() {
   if (!sb) return;
-  await sb.auth.signOut();
+
+  authVersion++;          // ✅ invalidate in-flight sync
+  clearTimeout(syncTimer); // ✅ stop queued cloud sync
+
+  // Immediately treat as logged out locally
   currentUser = null;
-  setAuthUI({ loggedIn:false, message:"Logged out (local-only mode)." });
+  setAuthUI({ loggedIn:false, message:"Logging out..." });
+
+  try {
+    const { error } = await sb.auth.signOut({ scope: "local" });
+    if (error) console.warn("Supabase signOut error:", error.message);
+  } catch (e) {
+    console.warn("Supabase signOut threw:", e);
+  } finally {
+    clearAllSupabaseAuthKeys();
+
+    // Double-check: if session still exists, nuke again
+    try {
+      const { data } = await sb.auth.getSession();
+      if (data?.session) {
+        await sb.auth.signOut({ scope: "local" });
+        clearAllSupabaseAuthKeys();
+      }
+    } catch {}
+
+    setAuthUI({ loggedIn:false, message:"Logged out (Guest mode—progress won’t be saved)." });
+    location.reload();
+  }
 }
+
 
 function scheduleCloudSync() {
   if (!sb || !currentUser) return;
@@ -425,16 +517,28 @@ function mergeRemoteIntoLocal(remote) {
 async function loadProgressFromCloud() {
   if (!sb || !currentUser) return;
 
-  setAuthUI({ loggedIn:true, message:"Signed in. Syncing..." });
+  const myAuthVersion = authVersion;
+  const myUserId = currentUser.id;
+  const myEmail = currentUser.email;
+
+  setAuthUI({ loggedIn:true, message:"Signed in. Syncing...", email: myEmail });
 
   const { data, error } = await sb
     .from("progress")
     .select("known, hard, per_day, deck_mode")
-    .eq("user_id", currentUser.id)
+    .eq("user_id", myUserId)
     .maybeSingle();
 
+  // ✅ If user logged out or changed while we were waiting, do nothing.
+  if (authVersion !== myAuthVersion || !currentUser || currentUser.id !== myUserId) return;
+
   if (error) {
-    setAuthUI({ loggedIn:true, message:"Sync error: " + error.message });
+    // AbortError can happen from overlapping requests; treat as harmless
+    if (String(error.message || "").includes("AbortError")) {
+      setAuthUI({ loggedIn:true, message:"", email: myEmail });
+      return;
+    }
+    setAuthUI({ loggedIn:true, message:"Sync error: " + error.message, email: myEmail });
     return;
   }
 
@@ -442,20 +546,29 @@ async function loadProgressFromCloud() {
   try {
     if (data) mergeRemoteIntoLocal(data);
     await pushProgressToCloud(false);
+
+    // ✅ guard again after awaiting push
+    if (authVersion !== myAuthVersion || !currentUser || currentUser.id !== myUserId) return;
   } finally {
     isApplyingRemote = false;
   }
 
   buildToday(); buildDeck(); renderAll();
-  setAuthUI({ loggedIn:true, message:"Signed in • Synced ✓" });
+  setAuthUI({ loggedIn:true, message:"", email: myEmail }); // keep status quiet when healthy
 }
+
+
 
 async function pushProgressToCloud(showToastMsg=false) {
   if (!sb || !currentUser) return;
   if (isApplyingRemote) return;
 
+  const myAuthVersion = authVersion;
+  const myUserId = currentUser.id;
+  const myEmail = currentUser.email;
+
   const payload = {
-    user_id: currentUser.id,
+    user_id: myUserId,
     known: [...state.known],
     hard: [...state.hard],
     per_day: state.perDay,
@@ -464,12 +577,15 @@ async function pushProgressToCloud(showToastMsg=false) {
 
   const { error } = await sb.from("progress").upsert(payload);
 
+  if (authVersion !== myAuthVersion || !currentUser || currentUser.id !== myUserId) return;
+
   if (error) {
-    setAuthUI({ loggedIn:true, message:"Save error: " + error.message });
+    setAuthUI({ loggedIn:true, message:"Save error: " + error.message, email: myEmail });
     return;
   }
   if (showToastMsg) toast("Synced");
 }
+
 
 /* ===========================
    8) Wire up events
@@ -565,6 +681,27 @@ passwordInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") signInBtn.click();
 });
 logoutBtn.addEventListener("click", signOut);
+// Hamburger menu open/close
+authMenuBtn?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleAuthMenu();
+});
+
+// Click outside closes menu
+document.addEventListener("click", () => closeAuthMenu());
+
+// ESC closes menu
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeAuthMenu();
+});
+
+// Mobile logout button
+logoutBtnMobile?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  closeAuthMenu();
+  await signOut();
+});
+
 
 /* ===========================
    9) Boot app + auth
@@ -584,12 +721,23 @@ logoutBtn.addEventListener("click", signOut);
     return;
   }
 
-  sb.auth.onAuthStateChange(async (_event, session) => {
+  sb.auth.onAuthStateChange(async (event, session) => {
+    authVersion++; // ✅ REQUIRED so your guards work
+
     currentUser = session?.user || null;
-    if (currentUser) {
+
+    if (!currentUser) {
+      setAuthUI({
+        loggedIn: false,
+        message: "Not signed in (Guest mode—progress won’t be saved).",
+      });
+      return;
+    }
+
+    if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
       await loadProgressFromCloud();
     } else {
-      setAuthUI({ loggedIn:false, message:"Not signed in (local-only mode)." });
+      setAuthUI({ loggedIn: true, message: "", email: currentUser.email });
     }
   });
 
@@ -599,6 +747,6 @@ logoutBtn.addEventListener("click", signOut);
   if (currentUser) {
     await loadProgressFromCloud();
   } else {
-    setAuthUI({ loggedIn:false, message:"Not signed in (local-only mode)." });
+    setAuthUI({ loggedIn:false, message:"Not signed in (Guest mode—progress won’t be saved)." });
   }
 })();

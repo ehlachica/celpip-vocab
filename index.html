@@ -13,47 +13,70 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="title">
-      <h1>CELPIP Daily Vocab (400)</h1>
-      <p class="sub">Tap the card to flip. Progress saves locally and (if you sign in) syncs across devices.</p>
-
-      <!-- AUTH UI (Email + Password) -->
-      <div class="pillrow" id="authBox" style="margin-top:8px; gap:8px;">
-        <div class="pill">
-          <span class="muted">Email</span>
-          <input id="emailInput" type="email" placeholder="you@email.com" style="width:190px;text-align:left;" />
+    <div class="topbar">
+      <div class="brandArea">
+        <h1>CELPIP Daily Vocab</h1>
+      </div>
+    
+      <div class="authArea">
+        <div class="pillrow" id="authBox">
+          <!-- Signed OUT -->
+          <div class="authSignedOut" id="authSignedOut">
+            <div class="pill">
+              <span class="muted">Email</span>
+              <input id="emailInput" type="email" placeholder="you@email.com" />
+            </div>
+      
+            <div class="pill">
+              <span class="muted">Password</span>
+              <input id="passwordInput" type="password" placeholder="••••••••" />
+            </div>
+      
+            <button class="mini primary" id="signInBtn">Sign in</button>
+            <button class="mini" id="signUpBtn">Sign up</button>
+          </div>
+      
+          <!-- Signed IN -->
+          <div class="authSignedIn" id="authSignedIn" style="display:none;">
+            <div class="pill" id="userPill">
+              <span class="muted">Hi,</span>
+              <span id="userName" class="username">—</span>
+            </div>
+          
+            <!-- Desktop logout button -->
+            <button class="mini" id="logoutBtn">Log out</button>
+          
+            <!-- Mobile hamburger -->
+            <div class="menuWrap" id="authMenuWrap">
+              <button class="mini" id="authMenuBtn" type="button" aria-label="Account menu" aria-expanded="false">☰</button>
+              <div class="menu" id="authMenu" role="menu" aria-label="Account">
+                <button class="mini" id="logoutBtnMobile" type="button" role="menuitem">Log out</button>
+              </div>
+            </div>
+          </div>
+      
+          <div class="footer" id="authStatus"></div>
         </div>
-        <div class="pill">
-          <span class="muted">Password</span>
-          <input id="passwordInput" type="password" placeholder="••••••••" style="width:150px;text-align:left;" />
-        </div>
-        <button class="mini primary" id="signInBtn">Sign in</button>
-        <button class="mini" id="signUpBtn">Sign up</button>
-        <button class="mini" id="logoutBtn" style="display:none;">Log out</button>
-        <div class="footer" id="authStatus" style="max-width:520px;"></div>
       </div>
 
-      <div class="footer" style="margin-top:4px;">
-        Tip: if you turned on “Confirm email” in Supabase, you’ll need to confirm your email once after signing up.
-      </div>
-    </div>
-
-    <div class="pillrow">
-      <div class="pill" title="How many new words to learn each day">
-        <span class="muted">Words/day</span>
-        <input id="perDay" type="number" min="5" max="50" step="1" value="10" />
-      </div>
-      <div class="pill" title="Choose what the main card pulls from">
-        <span class="muted">Deck</span>
-        <select id="deckMode">
-          <option value="today">Today</option>
-          <option value="hard">Hard</option>
-          <option value="all">All</option>
-        </select>
-      </div>
-      <button class="mini bad" id="resetBtn" title="Clears Known/Hard marks (local + cloud)">Reset Progress</button>
     </div>
   </header>
+  
+  <div class="pillrow">
+    <div class="pill" title="How many new words to learn each day">
+      <span class="muted">Words/day</span>
+      <input id="perDay" type="number" min="5" max="50" step="1" value="10" />
+    </div>
+    <div class="pill" title="Choose what the main card pulls from">
+      <span class="muted">Deck</span>
+      <select id="deckMode">
+        <option value="today">Today</option>
+        <option value="hard">Hard</option>
+        <option value="all">All</option>
+      </select>
+    </div>
+    <button class="mini bad" id="resetBtn" title="Clears Known/Hard marks (local + cloud)">Reset Progress</button>
+  </div>
 
   <div class="tabs">
     <div class="tab active" data-tab="learn">Learn (Flashcards)</div>
@@ -71,7 +94,14 @@
         <div class="flash" id="flashCard" role="button" tabindex="0" aria-label="Flashcard (tap to flip)">
           <div class="word" id="flashWord">—</div>
           <div class="def" id="flashDef" style="display:none;">—</div>
-          <div class="hint" id="flashHint">Tap to reveal definition • <span class="kbd">Space</span> flip • <span class="kbd">←</span>/<span class="kbd">→</span> prev/next • <span class="kbd">K</span> known • <span class="kbd">H</span> hard</div>
+          <div class="hint" id="flashHint">
+            <span class="hint-mobile">Tap to reveal definition</span>
+            <span class="hint-desktop">
+              Tap to reveal definition • <span class="kbd">Space</span> flip •
+              <span class="kbd">←</span>/<span class="kbd">→</span> prev/next •
+              <span class="kbd">K</span> known • <span class="kbd">H</span> hard
+            </span>
+          </div>
         </div>
         <div class="row">
           <button class="mini primary" id="prevBtn">← Prev</button>
@@ -155,7 +185,7 @@
   </div>
 
   <div class="footer">
-    Data stays on your device (localStorage). If you sign in, your progress also syncs to your Supabase account.
+    Progress isn’t saved in Guest mode. Sign in to save and sync your progress to your account.
   </div>
 </div>
 
